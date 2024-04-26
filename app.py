@@ -1,19 +1,38 @@
+import boto3
+from botocore.exceptions import NoCredentialsError
 import pickle
 import os
-
 from dotenv import load_dotenv
-
 import streamlit as st
 from streamlit_extras.add_vertical_space import add_vertical_space
-
 from PyPDF2 import PdfReader
-
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.question_answering import load_qa_chain
 from langchain.vectorstores import FAISS
-
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAI
+
+# AWS S3 config
+s3 = boto3.client('s3', aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'), aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'))
+
+def save_vector_store_to_s3(file_name, vector_store):
+  bucket_name = os.getenv('bucket-name')
+  vector_store_bytes = pickle.dumps(vector_store)
+  s3.put_object(Bucket=bucket_name, Key=file_name, Body=vector_store_bytes)
+
+def load_vector_store_from_s3(file_name):
+  bucket_name = os.getenv('bucket-name')
+  obj = s3.get_object(Bucket=bucket_name, Key=file_name)
+  return pickle.loads(obj['Body'].read())
+
+def s3_file_exists(file_name):
+  bucket_name = os.getenv('bucket-name')
+  try:
+      s3.head_object(Bucket=bucket_name, Key=file_name)
+      return True
+  except:
+      return False
+
 
 # sidebar
 with st.sidebar:
@@ -54,15 +73,12 @@ def main():
     # creating embeddings
     store_name = pdf.name[:-4]
 
-    if os.path.exists(f"{store_name}.pkl"):
-      with open(f"{store_name}.pkl", "rb") as f:
-        vectorStore = pickle.load(f)
+    if s3_file_exists(f"{store_name}.pkl"):
+      vectorStore = load_vector_store_from_s3(f"{store_name}.pkl")
     else:
       embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
       vectorStore = FAISS.from_texts(chunks, embedding=embeddings)
-
-      with open(f"{store_name}.pkl", "wb") as f:
-        pickle.dump(vectorStore, f)
+      save_vector_store_to_s3(f"{store_name}.pkl", vectorStore)
 
     query = st.text_input("Ask questions about your file:")
 
